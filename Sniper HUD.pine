@@ -1,0 +1,116 @@
+// © ChiamakaS
+//@version=6
+indicator("Sniper Alert Wrapper", overlay=false)
+
+// ==========================================
+// 1. INPUTS
+// ==========================================
+
+// --- RSI Settings ---
+grp_rsi = "RSI Settings"
+lenRsi  = input.int(14, "RSI Length", group=grp_rsi)
+
+// --- WaveTrend Settings ---
+grp_wt  = "WaveTrend Settings"
+lenWt   = input.int(10, "WT Channel Len", group=grp_wt)
+lenAvg  = input.int(21, "WT Average Len", group=grp_wt)
+
+// --- Volume Settings ---
+grp_vol = "Volume Settings"
+lenVol     = input.int(20, "Vol MA Len", group=grp_vol)
+rvolThresh = input.float(1.25, "RVOL Threshold", step=0.05, tooltip="1.0 = Avg, 1.25 = 25% > Avg", group=grp_vol)
+
+// ==========================================
+// 2. CALCULATIONS
+// ==========================================
+
+// --- RSI ---
+rsiVal = ta.rsi(close, lenRsi)
+
+// --- WaveTrend (Normalized) ---
+// 1. Calculate Standard WaveTrend
+ap      = hlc3
+esa     = ta.ema(ap, lenWt)
+d       = ta.ema(math.abs(ap - esa), lenWt)
+ci      = (ap - esa) / (0.015 * d)
+wtRaw   = ta.ema(ci, lenAvg)
+
+// 2. Normalize to fit RSI Scale (0-100)
+// Standard WT moves approx -60 to +60.
+// We compress it (*0.25) and shift it up (+50) so it aligns with RSI bounds.
+wt1     = (wtRaw * 0.25) + 50   // Fast Line (Green)
+wt2     = ta.sma(wt1, 4)        // Slow Line (Red)
+
+// --- Adaptive Volume (RVOL) ---
+volMa   = ta.sma(volume, lenVol)
+// Use nz() to handle the first few bars where volMa might be NaN or 0
+rvol    = volMa > 0 ? volume / volMa : 0.0
+volOk   = rvol > rvolThresh
+
+// --- Cross Logic ---
+// Must run every bar to maintain history consistency
+wtCrossUp = ta.crossover(wt1, wt2)
+wtCrossDn = ta.crossunder(wt1, wt2)
+
+// ==========================================
+// 3. WAGER CONTEXT (15m Strike Line)
+// ==========================================
+
+// A. Detect the Start of a 15m Window
+isNewWindow = ta.change(time("15")) != 0
+
+// B. Capture and Hold the Open Price of that Window
+// 'var' keeps the value consistent across the 1m bars until we update it
+var float wagerOpen = na
+if isNewWindow
+    wagerOpen := open
+
+// ==========================================
+// 4. TRIGGERS
+// ==========================================
+
+// BUY: RSI Low (<35) + WT Cross Up + Volume Spike
+buySignal  = rsiVal < 35 and wtCrossUp and volOk
+
+// SELL: RSI High (>65) + WT Cross Down + Volume Spike
+sellSignal = rsiVal > 65 and wtCrossDn and volOk
+
+// ==========================================
+// 5. VISUALS
+// ==========================================
+
+// --- Main Chart Overlays (force_overlay=true) ---
+// Plot the Strike Line (15m Open) on the main chart
+
+// --- Dynamic Strike Line ---
+// If it's the live bar: Green if Price > Strike, Red if Price <= Strike.
+// If it's a closed bar: Yellow (History).
+strikeColor = barstate.islast ? (close > wagerOpen ? color.green : color.red) : color.yellow
+
+// force_overlay=true puts this line on the Main Chart (Price), not the Indicator pane
+plot(wagerOpen, "Wager Strike", strikeColor, linewidth=2, style=plot.style_stepline, force_overlay=true)
+
+// --- Indicator Pane Visuals ---
+// Bounds (35 and 65 are the Sniper Kill Zones)
+hTop = hline(65, "Upper", color.red)
+hBot = hline(35, "Lower", color.green)
+fill(hTop, hBot, color.new(color.blue, 90))
+
+// Plot Indicators
+// RSI is solid Blue
+plot(rsiVal, "RSI", color.blue, linewidth=2)
+// WT is slightly transparent to differentiate from RSI
+plot(wt1, "WT Fast", color.new(color.green, 40))
+plot(wt2, "WT Slow", color.new(color.red, 40))
+
+// Signal Markers
+plotshape(buySignal, "Sniper YES", shape.labelup, location.bottom, color.green, 0, "YES", color.white, size=size.tiny)
+plotshape(sellSignal, "Sniper NO", shape.labeldown, location.top, color.red, 0, "NO", color.white, size=size.tiny)
+
+// ==========================================
+// 6. ALERTS
+// ==========================================
+
+// Note: We use plot('RSI') to send the exact RSI value in the alert text
+alertcondition(buySignal, "SNIPER YES", "YES Setup: RSI {{plot('RSI')}} | Price {{close}}")
+alertcondition(sellSignal, "SNIPER NO", "NO Setup: RSI {{plot('RSI')}} | Price {{close}}")
