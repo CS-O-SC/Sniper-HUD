@@ -4,6 +4,13 @@
 ## Overview
 The **Sniper HUD** is a specialized Pine Script v6 indicator designed for **15-minute Bitcoin Wagers**. It combines momentum, volume, and time-based logic to provide a clear "YES/NO" signal for binary outcomes. It is engineered by aligning RSI, WaveTrend, and Adaptive Volume.
 
+## Visuals
+![Sniper HUD Chart View](assets/preview_1.png)
+*Main Chart with Strike Line and Indicator Pane*
+
+![Sniper HUD Close Up](assets/preview_2.png)
+*Close-up of Signals and Strike Line*
+
 ## Key Features
 
 ### 1. The "Strike Line" (Wager Context)
