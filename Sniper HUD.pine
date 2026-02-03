@@ -3,6 +3,12 @@
 indicator("Sniper Alert Wrapper", overlay=false)
 
 // ==========================================
+// 0. CONSTANTS & DEFINITIONS
+// ==========================================
+// 'color.gold' is not built-in, so we define it manually:
+colGold = #FFD700 
+
+// ==========================================
 // 1. INPUTS
 // ==========================================
 
@@ -15,10 +21,22 @@ grp_wt  = "WaveTrend Settings"
 lenWt   = input.int(10, "WT Channel Len", group=grp_wt)
 lenAvg  = input.int(21, "WT Average Len", group=grp_wt)
 
+// --- Trend Filter Settings ---
+grp_trend = "Trend Regime Filter"
+useTrend  = input.bool(true, "Filter Counter-Trend Signals?", group=grp_trend)
+tfTrend   = input.timeframe("5", "Trend Timeframe", group=grp_trend)
+lenTrend  = input.int(50, "Trend EMA Length", group=grp_trend)
+
 // --- Volume Settings ---
 grp_vol = "Volume Settings"
 lenVol     = input.int(20, "Vol MA Len", group=grp_vol)
-rvolThresh = input.float(1.25, "RVOL Threshold", step=0.05, tooltip="1.0 = Avg, 1.25 = 25% > Avg", group=grp_vol)
+rvolThresh = input.float(1.25, "RVOL Threshold", group=grp_vol)
+
+// --- Conviction / Bayesian Weights ---
+grp_bayes = "Conviction Logic"
+wtWeight  = input.float(40.0, "WT Weight (0-50)", minval=0, maxval=50, group=grp_bayes)
+rsiWeight = input.float(30.0, "RSI Weight (0-50)", minval=0, maxval=50, group=grp_bayes)
+volWeight = input.float(30.0, "Vol Weight (0-50)", minval=0, maxval=50, group=grp_bayes)
 
 // ==========================================
 // 2. CALCULATIONS
@@ -28,7 +46,7 @@ rvolThresh = input.float(1.25, "RVOL Threshold", step=0.05, tooltip="1.0 = Avg, 
 rsiVal = ta.rsi(close, lenRsi)
 
 // --- WaveTrend (Normalized) ---
-// 1. Calculate Standard WaveTrend
+// Calculation: Standard WaveTrend
 ap      = hlc3
 esa     = ta.ema(ap, lenWt)
 d       = ta.ema(math.abs(ap - esa), lenWt)
@@ -36,81 +54,166 @@ ci      = (ap - esa) / (0.015 * d)
 wtRaw   = ta.ema(ci, lenAvg)
 
 // 2. Normalize to fit RSI Scale (0-100)
-// Standard WT moves approx -60 to +60.
-// We compress it (*0.25) and shift it up (+50) so it aligns with RSI bounds.
 wt1     = (wtRaw * 0.25) + 50   // Fast Line (Green)
 wt2     = ta.sma(wt1, 4)        // Slow Line (Red)
 
-// --- Adaptive Volume (RVOL) ---
+// --- Trend Regime (EMA Slope) ---
+// Get EMA from higher timeframe (non-repainting)
+trendEma = request.security(syminfo.tickerid, tfTrend, ta.ema(close, lenTrend), lookahead=barmerge.lookahead_on)
+// Calculate Slope (Current - Previous)
+trendSlope = trendEma - trendEma[1]
+isBullish  = trendSlope > 0
+isBearish  = trendSlope < 0
+
+// --- Volume (RVOL) ---
 volMa   = ta.sma(volume, lenVol)
-// Use nz() to handle the first few bars where volMa might be NaN or 0
 rvol    = volMa > 0 ? volume / volMa : 0.0
 volOk   = rvol > rvolThresh
 
 // --- Cross Logic ---
-// Must run every bar to maintain history consistency
 wtCrossUp = ta.crossover(wt1, wt2)
 wtCrossDn = ta.crossunder(wt1, wt2)
 
 // ==========================================
-// 3. WAGER CONTEXT (15m Strike Line)
+// 3. WAGER CONTEXT (15m Window & Strike)
 // ==========================================
 
-// A. Detect the Start of a 15m Window
+// A. Detect New Window (00, 15, 30, 45)
 isNewWindow = ta.change(time("15")) != 0
 
-// B. Capture and Hold the Open Price of that Window
-// 'var' keeps the value consistent across the 1m bars until we update it
+// B. Capture Strike Price
 var float wagerOpen = na
 if isNewWindow
     wagerOpen := open
 
-// ==========================================
-// 4. TRIGGERS
-// ==========================================
-
-// BUY: RSI Low (<35) + WT Cross Up + Volume Spike
-buySignal  = rsiVal < 35 and wtCrossUp and volOk
-
-// SELL: RSI High (>65) + WT Cross Down + Volume Spike
-sellSignal = rsiVal > 65 and wtCrossDn and volOk
+// C. Time Decay Calculation
+msInWindow  = time % (15 * 60 * 1000)
+minsElapsed = msInWindow / 60000.0
+timeDecay   = math.max(1.0 - (minsElapsed / 14.0), 0.0) 
 
 // ==========================================
-// 5. VISUALS
+// 4. CONVICTION SCORE (The Bayesian Update)
 // ==========================================
 
-// --- Main Chart Overlays (force_overlay=true) ---
-// Plot the Strike Line (15m Open) on the main chart
+// A. RSI Evidence
+float rsiScore = 0.0
+if rsiVal < 35
+    rsiScore := (35 - rsiVal) / 15.0 
+else if rsiVal > 65
+    rsiScore := (rsiVal - 65) / 15.0 
+rsiScore := math.min(rsiScore, 1.0)
 
-// --- Dynamic Strike Line ---
-// If it's the live bar: Green if Price > Strike, Red if Price <= Strike.
-// If it's a closed bar: Yellow (History).
+// B. WaveTrend Evidence
+wtGap    = math.abs(wt1 - wt2)
+wtScore  = math.min(wtGap / 5.0, 1.0) 
+
+// C. Volume Evidence
+volScore = math.min(rvol / (rvolThresh * 2), 1.0) 
+
+// D. Trend Validation (VETO POWER)
+// If Trend Filter is ON:
+// - Bullish Regime (Slope > 0) -> Block SELLs (allow only dip buys)
+// - Bearish Regime (Slope < 0) -> Block BUYs (allow only rally sells)
+// We check the POTENTIAL signal direction against the regime.
+// Instead of modifying the inputs, we nullify the score if it defies the regime.
+
+bool trendVeto = false
+if useTrend
+    // If calculating score for a BUY scenario (Low RSI), we need Bullish trend
+    if rsiVal < 50 and isBearish
+        trendVeto := true
+    // If calculating score for a SELL scenario (High RSI), we need Bearish trend
+    if rsiVal > 50 and isBullish
+        trendVeto := true
+
+// E. Total Weighted Score
+rawScore = (wtScore * wtWeight) + (rsiScore * rsiWeight) + (volScore * volWeight)
+
+// Apply Veto (Force to 0 if fighting the trend)
+if trendVeto
+    rawScore := 0.0
+
+// F. Apply Time Decay
+finalConviction = rawScore * timeDecay
+
+// ==========================================
+// 5. TRIGGERS
+// ==========================================
+
+// Trend Ok?
+// Buy: Need Bullish Slope or Filter OFF
+// Sell: Need Bearish Slope or Filter OFF
+trendBuyOk  = not useTrend or isBullish
+trendSellOk = not useTrend or isBearish
+
+buySignal  = rsiVal < 35 and wtCrossUp and volOk and trendBuyOk
+sellSignal = rsiVal > 65 and wtCrossDn and volOk and trendSellOk
+
+// ==========================================
+// 6. VISUALS
+// ==========================================
+
+// --- Main Chart Strike Line ---
 strikeColor = barstate.islast ? (close > wagerOpen ? color.green : color.red) : color.yellow
-
-// force_overlay=true puts this line on the Main Chart (Price), not the Indicator pane
 plot(wagerOpen, "Wager Strike", strikeColor, linewidth=2, style=plot.style_stepline, force_overlay=true)
 
-// --- Indicator Pane Visuals ---
-// Bounds (35 and 65 are the Sniper Kill Zones)
+// --- Indicator Pane ---
+
+// 1. Conviction Line
+plot(finalConviction, "Conviction Score", color.new(colGold, 20), linewidth=3, style=plot.style_area)
+
+// 2. Reference Lines
 hTop = hline(65, "Upper", color.red)
 hBot = hline(35, "Lower", color.green)
 fill(hTop, hBot, color.new(color.blue, 90))
 
-// Plot Indicators
-// RSI is solid Blue
+// 3. Main Indicators
 plot(rsiVal, "RSI", color.blue, linewidth=2)
-// WT is slightly transparent to differentiate from RSI
-plot(wt1, "WT Fast", color.new(color.green, 40))
-plot(wt2, "WT Slow", color.new(color.red, 40))
+plot(wt1, "WT Fast", color.new(color.green, 30))
+plot(wt2, "WT Slow", color.new(color.red, 30))
 
-// Signal Markers
+// 4. Signal Markers
 plotshape(buySignal, "Sniper YES", shape.labelup, location.bottom, color.green, 0, "YES", color.white, size=size.tiny)
 plotshape(sellSignal, "Sniper NO", shape.labeldown, location.top, color.red, 0, "NO", color.white, size=size.tiny)
 
 // ==========================================
-// 6. ALERTS
+// 7. HUD DASHBOARD (Table)
 // ==========================================
 
-// Note: We use plot('RSI') to send the exact RSI value in the alert text
-alertcondition(buySignal, "SNIPER YES", "YES Setup: RSI {{plot('RSI')}} | Price {{close}}")
-alertcondition(sellSignal, "SNIPER NO", "NO Setup: RSI {{plot('RSI')}} | Price {{close}}")
+var table hud = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 50), border_width=1)
+
+if barstate.islast
+    // Row 1: Time Left
+    minsLeft = 14 - math.floor(minsElapsed)
+    secLeft  = 60 - math.floor((msInWindow % 60000) / 1000)
+    timeLeftStr = str.tostring(minsLeft) + "m " + str.tostring(secLeft) + "s"
+    
+    // Row 2: Conviction
+    convColor = finalConviction > 50 ? color.green : finalConviction > 25 ? color.yellow : color.gray
+    
+    // Row 3: Regime
+    regimeStr = isBullish ? "BULLISH" : "BEARISH"
+    regimeCol = isBullish ? color.green : color.red
+    
+    // Row 4: Wager Status
+    wagerStatus = close > wagerOpen ? "WINNING" : "LOSING"
+    statusColor = close > wagerOpen ? color.green : color.red
+
+    // Fill Table
+    table.cell(hud, 0, 0, "Time Left:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 0, timeLeftStr, text_color=color.white, text_size=size.small, bgcolor=minsLeft < 3 ? color.new(color.red, 60) : na)
+    
+    table.cell(hud, 0, 1, "Conviction:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 1, str.tostring(math.round(finalConviction, 0)) + "%", text_color=convColor, text_size=size.small)
+    
+    table.cell(hud, 0, 2, "Regime:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 2, regimeStr, text_color=regimeCol, text_size=size.small)
+
+    table.cell(hud, 0, 3, "Wager:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 3, wagerStatus, text_color=statusColor, text_size=size.small)
+
+// ==========================================
+// 8. ALERTS
+// ==========================================
+alertcondition(buySignal, "SNIPER YES", "YES Setup | Score: {{plot('Conviction Score')}} | Price {{close}}")
+alertcondition(sellSignal, "SNIPER NO", "NO Setup | Score: {{plot('Conviction Score')}} | Price {{close}}")
