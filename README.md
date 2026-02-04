@@ -2,7 +2,9 @@
 **Repository**: [CS-O-SC/Sniper-HUD](https://github.com/CS-O-SC/Sniper-HUD)
 
 ## Overview
-The **Sniper HUD** is a specialized Pine Script v6 indicator designed for **15-minute Bitcoin Wagers**. It combines momentum, volume, and time-based logic to provide a clear "YES/NO" signal for binary outcomes. It is engineered by aligning RSI, WaveTrend, and Adaptive Volume.
+The **Sniper HUD** is a specialized Pine Script v6 strategy interface designed for **15-minute Bitcoin Binary Wagers** and short-term scalping. Unlike traditional indicators that issue binary "Buy/Sell" alerts, Sniper HUD calculates a real-time **Conviction Score (0-100%)** based on Bayesian probability, market regime, and session context.
+
+It answers one question: *"Is this mean-reversion trade valid RIGHT NOW?"*
 
 ## Visuals
 ![Sniper HUD Chart View](assets/preview_1.png)
@@ -13,45 +15,52 @@ The **Sniper HUD** is a specialized Pine Script v6 indicator designed for **15-m
 
 ## Key Features
 
-### 1. The "Strike Line" (Wager Context)
-- **Logic**: Automatically detects the start of a new 15-minute window (00, 15, 30, 45).
-- **Visual**: Plots a **Stepline** at the Open Price of the 15m window.
-- **Dynamic Coloring**:
-    - **Yellow**: Historical windows (closed).
-    - **Green**: Current Live Price > Strike (Winning "YES").
-    - **Red**: Current Live Price <= Strike (Winning "NO").
-- **Overlay**: Forces this line onto the main chart for instant context.
+### 1. The Conviction HUD (Top-Right Panel)
+A live dashboard providing instant situational awareness:
+-   **Conviction**: The weighted probability score (0-100%).
+-   **Regime**: Current Market Trend (BULLISH / BEARISH).
+-   **Session**: Active Volume Weight (e.g., AMERICA, ASIA).
+-   **Gap X**: Exact distance from the Strike Price.
+-   **Time Left**: Countdown for the current 15m candle.
+-   **Wager**: Identifies if the current window is in/out of the money.
 
-### 2. Sniper Signals (Momentum + Volume)
-Combines three indicators to filter high-probability setups:
-- **RSI (14)**: Identifies Overbought (>65) and Oversold (<35) zones.
-- **WaveTrend**: Normalized to fit the RSI scale. Provides crossover signals.
-- **Adaptive Volume (RVOL)**: Ensures volume is significantly higher than average (Threshold: 1.25x).
+### 2. Trend Regime Filter ("The Wind")
+Prevents "fighting the escalator."
+-   **Logic**: Monitoring the **5-minute EMA (50)** slope.
+-   **Bullish Regime**: Blocks SELL signals. Allow only "Dip Buys" (RSI < 35).
+-   **Bearish Regime**: Blocks BUY signals. Allow only "Rally Sells" (RSI > 65).
+-   *Effect*: Filters out the most common cause of binary losses—betting against a strong breakout.
 
-### 3. Clean "HUD" Pane
-- **Visuals**:
-    - RSI (Blue)
-    - WaveTrend Fast (Green Transparent)
-    - WaveTrend Slow (Red Transparent)
-    - Kill Zones (Shaded 35-65 Band)
-- **Signals**: "Sniper YES" (Green Label) and "Sniper NO" (Red Label) appear when all conditions align.
-- **Dual-Layer HUD**:
-    - *Main Chart*: Step-line overlays for window tracking and historical strike zones.
-    - *Indicator Pane*: Clean, transparency-weighted visual of RSI (Solid) vs. WaveTrend (Faded) for rapid decision-making.
+### 3. Session-Aware Volume
+Recognizes that not all volume is equal.
+-   **AMERICA (13-21 UTC)**: **1.4x** Weight (High Confidence).
+-   **EUROPE (07-13 UTC)**: **1.2x** Weight (Standard).
+-   **ASIA (23-07 UTC)**: **0.7x** Weight (Noise Filter).
+-   **WEEKEND**: **0.35x** Weight (Heavy Penalty for low liquidity).
+
+### 4. Smart Time Decay ("The Cliff")
+Signals are penalized based on how much time is left in the wager window.
+-   **0-9 mins**: Safe Zone (100-80% Strength).
+-   **10-11 mins**: Caution Zone (80-60% Strength).
+-   **12-13 mins**: **The Cliff** (Drops to 25% Strength).
+-   **14 mins**: The Floor (10% Strength - Ignore).
+
+### 5. The "Strike Line"
+-   **Logic**: Anchors the Open Price at 00, 15, 30, and 45.
+-   **Visual**: Plots a **Stepline** that turns **Green** (Winning) or **Red** (Losing) in real-time.
 
 ## Technical Stack
-- **Language**: Pine Script v6
-- **Primary Oscillators**: RSI (14), WaveTrend (10, 21)
-- **Volume Logic**: SMA-based Adaptive RVOL
-- **Alerts**: JSON-ready placeholders for automated "YES" and "NO" setups.
+-   **Language**: Pine Script v6
+-   **Core Oscillators**: RSI (14), WaveTrend (10, 21)
+-   **Logic Engine**: Weighted Sum Model with Veto Guards (Regime/Time).
 
 ## Installation
 1.  Open TradingView -> Pine Editor.
-2.  Copy and paste the `Sniper-HUD.pine`.
+2.  Copy and paste the `Sniper-HUD.pine` code.
 3.  Click "Save" and "Add to Chart".
 
 ## License
 © 2026 ChiamakaS. This project is for educational and personal use only. Trading involves significant risk; always validate signals against your own risk management protocols.
 
-## Repo Meta-Tags (For Discoverability)
-`pinescript-v6`, `tradingview-indicator`, `scalping-strategy`, `rsi-divergence`, `wavetrend`, `market-microstructure`
+## Repo Meta-Tags
+`pinescript-v6`, `binary-options`, `bayesian-inference`, `regime-filter`, `market-sessions`, `wavetrend`, `tradingview-indicator`, `scalping-strategy`, `rsi-divergence`, `market-microstructure`, `tradingview`
