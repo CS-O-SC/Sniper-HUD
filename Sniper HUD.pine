@@ -46,7 +46,7 @@ volWeight = input.float(30.0, "Vol Weight (0-50)", minval=0, maxval=50, group=gr
 rsiVal = ta.rsi(close, lenRsi)
 
 // --- WaveTrend (Normalized) ---
-// Calculation: Standard WaveTrend
+// 1. Calculate Standard WaveTrend
 ap      = hlc3
 esa     = ta.ema(ap, lenWt)
 d       = ta.ema(math.abs(ap - esa), lenWt)
@@ -59,20 +59,53 @@ wt2     = ta.sma(wt1, 4)        // Slow Line (Red)
 
 // --- Trend Regime (EMA Slope) ---
 // Get EMA from higher timeframe (non-repainting)
-trendEma = request.security(syminfo.tickerid, tfTrend, ta.ema(close, lenTrend), lookahead=barmerge.lookahead_on)
+trendEma = request.security(syminfo.tickerid, tfTrend, ta.ema(close, lenTrend), lookahead=barmerge.lookahead_off)
 // Calculate Slope (Current - Previous)
 trendSlope = trendEma - trendEma[1]
 isBullish  = trendSlope > 0
 isBearish  = trendSlope < 0
 
+// --- Session Logic (Time-Weighted Volume) ---
+// Get UTC Hour
+hourUTC = hour(time, "UTC")
+
+// Define Sessions
+isAsia    = hourUTC >= 23 or hourUTC < 7
+isEurope  = hourUTC >= 7 and hourUTC < 13
+isAmerica = hourUTC >= 13 and hourUTC < 21
+isAfter   = hourUTC >= 21 and hourUTC < 23
+
+// Define Weekend (Saturday=7, Sunday=1 in Pine)
+dayOfWeek = dayofweek(time, "UTC")
+isWeekend = dayOfWeek == dayofweek.saturday or dayOfWeek == dayofweek.sunday
+
+// Determine Vol Multiplier & Session Name
+float volMult = 1.0
+string sessName = "N/A"
+
+if isWeekend
+    volMult  := 0.35
+    sessName := "WEEKEND"
+else if isAsia
+    volMult  := 0.70
+    sessName := "ASIA"
+else if isEurope
+    volMult  := 1.20
+    sessName := "EUROPE"
+else if isAmerica
+    volMult  := 1.40
+    sessName := "AMERICA"
+else 
+    // After Hours
+    volMult  := 0.50
+    sessName := "POST-MKT"
+
 // --- Volume (RVOL) ---
 volMa   = ta.sma(volume, lenVol)
 rvol    = volMa > 0 ? volume / volMa : 0.0
-volOk   = rvol > rvolThresh
-
-// --- Cross Logic ---
-wtCrossUp = ta.crossover(wt1, wt2)
-wtCrossDn = ta.crossunder(wt1, wt2)
+//Check if volume has been high for at least 2 of the last 3 bars (Anti-Drift)
+isSustainedVol = math.sum(rvol > rvolThresh ? 1 : 0, 3) >= 2 
+volOk    = isSustainedVol // Replaces rvol > rvolThresh
 
 // ==========================================
 // 3. WAGER CONTEXT (15m Window & Strike)
@@ -87,15 +120,40 @@ if isNewWindow
     wagerOpen := open
 
 // C. Time Decay Calculation
+// Calculate how many minutes have passed in the current 15m window
 msInWindow  = time % (15 * 60 * 1000)
 minsElapsed = msInWindow / 60000.0
-timeDecay   = math.max(1.0 - (minsElapsed / 14.0), 0.0) 
+
+// Decay Factor: Sigmoid Cliff Logic
+// Min 0-9:   1.0 -> 0.8 (Safe Zone)
+// Min 10-11: 0.8 -> 0.6 (Caution Zone)
+// Min 12-13: 0.6 -> 0.25 (The Cliff)
+// Min 14+:   0.1 (Floor)
+
+float timeDecay = 0.1
+if minsElapsed < 10
+    // 0 to 9.99 mins: Map 0-10 range to 1.0-0.8
+    timeDecay := 1.0 - (minsElapsed / 10.0) * 0.2
+else if minsElapsed < 12
+    // 10 to 11.99 mins: Map 10-12 range to 0.8-0.6
+    timeDecay := 0.8 - ((minsElapsed - 10.0) / 2.0) * 0.2
+else if minsElapsed < 14
+    // 12 to 13.99 mins: Map 12-14 range to 0.6-0.25
+    timeDecay := 0.6 - ((minsElapsed - 12.0) / 2.0) * 0.35
+else
+    // 14+ mins
+    timeDecay := 0.1 
+
+// D. Calculate Real-time Gap X
+float gapX = na
+if not na(wagerOpen)
+    gapX := close - wagerOpen
 
 // ==========================================
 // 4. CONVICTION SCORE (The Bayesian Update)
 // ==========================================
 
-// A. RSI Evidence
+// A. RSI Evidence (0.0 to 1.0)
 float rsiScore = 0.0
 if rsiVal < 35
     rsiScore := (35 - rsiVal) / 15.0 
@@ -103,12 +161,15 @@ else if rsiVal > 65
     rsiScore := (rsiVal - 65) / 15.0 
 rsiScore := math.min(rsiScore, 1.0)
 
-// B. WaveTrend Evidence
+// B. WaveTrend Evidence (0.0 to 1.0)
 wtGap    = math.abs(wt1 - wt2)
 wtScore  = math.min(wtGap / 5.0, 1.0) 
 
-// C. Volume Evidence
-volScore = math.min(rvol / (rvolThresh * 2), 1.0) 
+// C. Volume Evidence (0.0 to 1.0) WITH SESSION WEIGHT
+// Base Score
+baseVolScore = math.min(rvol / (rvolThresh * 2), 1.0)
+// Apply Session Multiplier
+volScore = math.min(baseVolScore * volMult, 1.0) 
 
 // D. Trend Validation (VETO POWER)
 // If Trend Filter is ON:
@@ -136,6 +197,10 @@ if trendVeto
 // F. Apply Time Decay
 finalConviction = rawScore * timeDecay
 
+// --- Cross Logic (Moved down to use final Check) ---
+wtCrossUp = ta.crossover(wt1, wt2)
+wtCrossDn = ta.crossunder(wt1, wt2)
+
 // ==========================================
 // 5. TRIGGERS
 // ==========================================
@@ -154,7 +219,12 @@ sellSignal = rsiVal > 65 and wtCrossDn and volOk and trendSellOk
 // ==========================================
 
 // --- Main Chart Strike Line ---
+
+// If it's the live bar: Green if Price > Strike, Red if Price <= Strike.
+// If it's a closed bar: Yellow (History).
 strikeColor = barstate.islast ? (close > wagerOpen ? color.green : color.red) : color.yellow
+
+// force_overlay=true puts this line on the Main Chart (Price), not the Indicator pane
 plot(wagerOpen, "Wager Strike", strikeColor, linewidth=2, style=plot.style_stepline, force_overlay=true)
 
 // --- Indicator Pane ---
@@ -180,7 +250,7 @@ plotshape(sellSignal, "Sniper NO", shape.labeldown, location.top, color.red, 0, 
 // 7. HUD DASHBOARD (Table)
 // ==========================================
 
-var table hud = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 50), border_width=1)
+var table hud = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 50), border_width=1)
 
 if barstate.islast
     // Row 1: Time Left
@@ -191,11 +261,18 @@ if barstate.islast
     // Row 2: Conviction
     convColor = finalConviction > 50 ? color.green : finalConviction > 25 ? color.yellow : color.gray
     
-    // Row 3: Regime
+    // Row 3: Gap X
+    gapColor = gapX > 0 ? color.green : color.red
+    gapStr   = str.tostring(math.abs(gapX), "#.##")
+    
+    // Row 4: Regime
     regimeStr = isBullish ? "BULLISH" : "BEARISH"
     regimeCol = isBullish ? color.green : color.red
     
-    // Row 4: Wager Status
+    // Row 5: Session
+    sessColor = isAmerica or isEurope ? color.green : color.orange
+
+    // Row 6: Wager Status
     wagerStatus = close > wagerOpen ? "WINNING" : "LOSING"
     statusColor = close > wagerOpen ? color.green : color.red
 
@@ -206,11 +283,17 @@ if barstate.islast
     table.cell(hud, 0, 1, "Conviction:", text_color=color.white, text_size=size.small)
     table.cell(hud, 1, 1, str.tostring(math.round(finalConviction, 0)) + "%", text_color=convColor, text_size=size.small)
     
-    table.cell(hud, 0, 2, "Regime:", text_color=color.white, text_size=size.small)
-    table.cell(hud, 1, 2, regimeStr, text_color=regimeCol, text_size=size.small)
+    table.cell(hud, 0, 2, "Gap X:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 2, gapStr, text_color=gapColor, text_size=size.small)
+    
+    table.cell(hud, 0, 3, "Regime:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 3, regimeStr, text_color=regimeCol, text_size=size.small)
 
-    table.cell(hud, 0, 3, "Wager:", text_color=color.white, text_size=size.small)
-    table.cell(hud, 1, 3, wagerStatus, text_color=statusColor, text_size=size.small)
+    table.cell(hud, 0, 4, "Session:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 4, sessName, text_color=sessColor, text_size=size.small)
+
+    table.cell(hud, 0, 5, "Wager:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 5, wagerStatus, text_color=statusColor, text_size=size.small)
 
 // ==========================================
 // 8. ALERTS
