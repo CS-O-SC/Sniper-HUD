@@ -250,11 +250,7 @@ plotshape(sellSignal, "Sniper NO", shape.labeldown, location.top, color.red, 0, 
 // 7. HUD DASHBOARD (Table)
 // ==========================================
 
-// ==========================================
-// 7. HUD DASHBOARD (Table)
-// ==========================================
-
-var table statusHud = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 50), border_width=1)
+var table statusHud = table.new(position.top_right, 2, 0, bgcolor=color.new(color.black, 50), border_width=1)
 
 if barstate.islast
     // Row 1: Time Left
@@ -281,23 +277,23 @@ if barstate.islast
     statusColor = close > wagerOpen ? color.green : color.red
 
     // Fill Table
-    table.cell(statusHud, 0, 0, "Time Left:", text_color=color.white, text_size=size.small)
-    table.cell(statusHud, 1, 0, timeLeftStr, text_color=color.white, text_size=size.small, bgcolor=minsLeft < 3 ? color.new(color.red, 60) : na)
+    table.cell(hud, 0, 0, "Time Left:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 0, timeLeftStr, text_color=color.white, text_size=size.small, bgcolor=minsLeft < 3 ? color.new(color.red, 60) : na)
     
-    table.cell(statusHud, 0, 1, "Conviction:", text_color=color.white, text_size=size.small)
-    table.cell(statusHud, 1, 1, str.tostring(math.round(finalConviction, 0)) + "%", text_color=convColor, text_size=size.small)
+    table.cell(hud, 0, 1, "Conviction:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 1, str.tostring(math.round(finalConviction, 0)) + "%", text_color=convColor, text_size=size.small)
     
-    table.cell(statusHud, 0, 2, "Gap X:", text_color=color.white, text_size=size.small)
-    table.cell(statusHud, 1, 2, gapStr, text_color=gapColor, text_size=size.small)
+    table.cell(hud, 0, 2, "Gap X:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 2, gapStr, text_color=gapColor, text_size=size.small)
     
-    table.cell(statusHud, 0, 3, "Regime:", text_color=color.white, text_size=size.small)
-    table.cell(statusHud, 1, 3, regimeStr, text_color=regimeCol, text_size=size.small)
+    table.cell(hud, 0, 3, "Regime:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 3, regimeStr, text_color=regimeCol, text_size=size.small)
 
-    table.cell(statusHud, 0, 4, "Session:", text_color=color.white, text_size=size.small)
-    table.cell(statusHud, 1, 4, sessName, text_color=sessColor, text_size=size.small)
+    table.cell(hud, 0, 4, "Session:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 4, sessName, text_color=sessColor, text_size=size.small)
 
-    table.cell(statusHud, 0, 5, "Wager:", text_color=color.white, text_size=size.small)
-    table.cell(statusHud, 1, 5, wagerStatus, text_color=statusColor, text_size=size.small)
+    table.cell(hud, 0, 5, "Wager:", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 5, wagerStatus, text_color=statusColor, text_size=size.small)
 
 // ==========================================
 // 8. ALERTS
