@@ -150,6 +150,42 @@ if not na(wagerOpen)
     gapX := close - wagerOpen
 
 // ==========================================
+// GRAVITY ENGINE V1 (Spatial Logic)
+// ==========================================
+
+// 1. Define "Escape Velocity" (Session-Calibrated)
+float escapeVel = 130.0  // Asia / Default
+if isAmerica
+    escapeVel := 300.0   // NY Session (ETF + Macro Noise)
+else if isEurope
+    escapeVel := 200.0   // London (Clean Liquidity)
+else if isWeekend
+    escapeVel := 120.0   // Weekend Drift
+
+// 2. Gap Dynamics (Expansion vs Orbit)
+// Use 3-bar lookback for stability
+float gapVelocity = na
+if not na(gapX) and not na(gapX[3])
+    gapVelocity := math.abs(gapX) - math.abs(gapX[3])
+
+// 3. The "Bite Zone" Logic (Minute 9 -> 13)
+float gravityScore = 1.0  // Neutral by default
+
+if minsElapsed >= 9 and minsElapsed < 13
+    // SCENARIO A: Super Conviction Exception (Moonshot)
+    if math.abs(gapX) > 800
+        gravityScore := 1.5
+    // SCENARIO B: Inadequate Escape (The Trap)
+    else if math.abs(gapX) < escapeVel and gapVelocity <= 20
+        gravityScore := 0.1   // Hard veto - coin-flip zone
+    // SCENARIO C: Quick Bite (Momentum Ignition)
+    else if math.abs(gapX) >= escapeVel or gapVelocity > 50
+        gravityScore := 1.2
+    // SCENARIO D: Orbit Zone (Sketchy, but not dead)
+    else
+        gravityScore := 0.25
+
+// ==========================================
 // 4. CONVICTION SCORE (The Bayesian Update)
 // ==========================================
 
@@ -195,7 +231,9 @@ if trendVeto
     rawScore := 0.0
 
 // F. Apply Time Decay
-finalConviction = rawScore * timeDecay
+// F. Apply Time Decay & Gravity Engine
+finalConviction = rawScore * timeDecay * gravityScore
+finalConviction := math.min(finalConviction, 100.0) // Cap at 100
 
 // --- Cross Logic (Moved down to use final Check) ---
 wtCrossUp = ta.crossover(wt1, wt2)
@@ -250,7 +288,7 @@ plotshape(sellSignal, "Sniper NO", shape.labeldown, location.top, color.red, 0, 
 // 7. HUD DASHBOARD (Table)
 // ==========================================
 
-var table statusHud = table.new(position.top_right, 2, 0, bgcolor=color.new(color.black, 50), border_width=1)
+var table hud = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 50), border_width=1)
 
 if barstate.islast
     // Row 1: Time Left
