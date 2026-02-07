@@ -60,7 +60,7 @@ Synchronizes price action with the 15-minute settlement cycle to provide a fixed
     - **HUD Dashboard**: A clean, table-based interface for rapid decision-making without obstructing price action.
 - **Dynamic Transparency**: Logic-driven opacity that highlights high-conviction signals while dimming noise.
 
-### 6. Gravity Engine V1 (Spatial Logic)
+### 7. Gravity Engine V1 (Spatial Logic)
 Introduces "Escape Velocity" to differentiate between valid late-window signals and "traps".
 -   **Concept**: If price is too close to the strike (stagnating) at Minute 12, the signal is killed. If it's "Orbiting" or "Moonshotting", the signal is boosted.
 -   **Escape Velocity**: Dynamic threshold (e.g., 300 points in NY vs 130 in Asia).
